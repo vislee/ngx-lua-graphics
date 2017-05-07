@@ -17,8 +17,8 @@ gcc -fPIC -shared luaext.c -o luaext.so -I/usr/local/Cellar/openresty/1.11.2.3/l
 
 + v
 
- - 格式：v_%d
- - 说明：版本
+  - 格式：v_%d
+  - 说明：版本
 
 + f
 
