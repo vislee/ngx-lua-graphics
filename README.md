@@ -1,25 +1,35 @@
 ### 在线图片处理服务
+================
+
+通过指令可以对uri的图片做剪裁、旋转、水印等处理
+
+例如： 对test.jpg这张图片转换为png格式，宽高为400，圆角，图片中央添加文字hello liwq，字体大小为40。图片中间添加logo图片水印
+http://127.0.0.1:8080/imgx/test/f_png,r_max,t_hello+liwq--40---200-200,w_400,h_400,p_logo---200-200/test.jpg
+
 
 
 #### 安装
+================
 
 + 安装graphicsmagick
 + 安装openresty
 + 安装lua-resty-http
 + 编译安装luaext动态库
-gcc -fPIC -shared luaext.c -o luaext.so -I/usr/local/Cellar/openresty/1.11.2.3/luajit/include/luajit-2.1/ -L/usr/local/Cellar/openresty/1.11.2.3/luajit/lib/ -lluajit-5.1
+gcc -fPIC -shared luaext.c -o luaext.so -I ./openresty/1.11.2.3/luajit/include/luajit-2.1/ -L ./openresty/1.11.2.3/luajit/lib/ -lluajit-5.1
 
 
 #### 指令
+=================
 
-指令是对图片做的动作。
-不允许有重复的指令，指令之间用英文逗号隔开。例如：w_300,h_300,r_30,p_png,t_hello+world-30-FF4500-southeast
+指令是对图片做的动作。可以由多组指令共同处理，每组之间用管道符(|)分割。
+一组之内不允许有重复的指令，组内指令用英文逗号隔开。
+例如：w_300,h_300,r_30,p_png,t_hello+world--30-FF4500-southeast|t_hello+liwq--50--center
 
 
 + v
 
-  - 格式：v_%d
-  - 说明：版本
+  - 格式：v_ver
+  - 说明：版本,ver取值0-100
 
 + f
 
@@ -79,3 +89,7 @@ gcc -fPIC -shared luaext.c -o luaext.so -I/usr/local/Cellar/openresty/1.11.2.3/l
   - 说明：图片水印。picture为水印图片。w水印图片的宽度，0为默认宽度。h水印图片的高度，0为默认高度。x和y是水印图片位置，re为旋转度数。
 
 
+Author
+======
+
+vislee
