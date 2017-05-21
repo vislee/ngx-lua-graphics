@@ -1,4 +1,4 @@
-// Copyright (c) liwq, SAE
+// Copyright (c) 2017 liwq, SAE
 
 #include <errno.h>
 #include <stdio.h>
