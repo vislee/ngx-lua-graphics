@@ -1,7 +1,9 @@
--- Copyright (c) 2017 liwq
+-- Copyright (c) 2017 liwq, SAE
 
-local cjson = require "cjson.safe"
+
+local memcached  = require "resty.memcached"
 local resolver = require "resty.dns.resolver"
+local cjson = require "cjson.safe"
 local http = require "resty.http"
 local luaext = require "luaext"
 
@@ -15,6 +17,7 @@ local _M = {
     AGAIN    = 1,
     NOTFOUND = 2,
     JUMP     = 3,
+    UPSERR   = 4,
 }
 
 function _M.split(str, sep, maxsplit)
@@ -57,6 +60,7 @@ function _M.convert_bin_to_hex(bytes)
 end
 
 function _M.get_filename(path)
+    -- path  = ngx.unescape_uri(path)
     local sub_paths = _M.split(path, '/')
     local filename = sub_paths[#sub_paths]
     sub_paths[#sub_paths] = nil
@@ -65,7 +69,7 @@ function _M.get_filename(path)
     if #sub_names > 1 then
         ext_name = sub_names[#sub_names]
     end
-    return table.concat(sub_paths, '/'), filename, string.lower(ext_name) 
+    return table.concat(sub_paths, '/'), filename, ext_name and string.lower(ext_name) 
 end
 
 
@@ -98,7 +102,7 @@ function _M.resolver_query(domain)
         timeout = 2000,
     }
     if not r then
-        ngx.say("failed to instantiate resolver: ", err)
+        -- ngx.say("failed to instantiate resolver: ", err)
         return nil, err
     end
 
@@ -125,37 +129,48 @@ function _M.tmp_file(file)
 end
 
 
-function _M.download(ip, port, host, uri, file)
-    ngx.log(ngx.INFO, string.format('download for (%s) host: %s uri: %s', ip, host, uri))
+function _M.download(file, ip, port, header, req_headers)
+    ngx.log(ngx.DEBUG, string.format('download from (%s) uri: %s heads: %s req_headers: %s', ip, header.uri, cjson.encode(header), cjson.encode(req_headers)))
+    if not req_headers or type(req_headers) ~= 'table' then
+        req_headers = {}
+    end
+
+    req_headers["host"] = header.host
+    req_headers["user-agent"] = header.user_agent or "SAEIMGXS/0.1.0"
+    req_headers["date"] = header.date
+    req_headers['authorization'] = header.auth
+
+    local ipp   = _M.split(ip, '%:')
     local httpc = http.new()
     httpc:set_timeout(3000)
-    httpc:connect(ip, port)
-
+    httpc:connect(ipp[1], tonumber(ipp[2]) or port)
     local res, err = httpc:request{
-        path = uri,
-        method = 'GET',
-        headers = {
-            ["Host"] = host,
-            ["User-Agent"] = "SAEIMGX/0.1.0",
-        },
+        path = header.uri or '/',
+        method = header.method or 'GET',
+        headers = req_headers,
     }
     if not res then
         pcall(http.close, httpc)
         return _M.AGAIN, err
     end
-    ngx.log(ngx.DEBUG, string.format('download res status: %s content-length: %d', res.status or 0, res.headers['Content-Length'] or 0))
+
+    ngx.log(ngx.INFO, string.format('download from %s(%s) uri: %s. status: %s content-length: %d', (header.host or ''), ip, header.uri, res.status or 0, res.headers['Content-Length'] or 0))
 
     if res.status == 404 then
         return _M.NOTFOUND, string.format('resp status %d', res.status)
     end
 
-    if res.status == 302 or res.status == 304 then
-        return _M.JUMP, res.headers['Location'] or res.headers['location']
+    -- if res.status == 302 or res.status == 304 then
+    --     return _M.JUMP, res.headers['Location'] or res.headers['location']
+    -- end
+
+    if res.status == 502 or res.status == 504 then
+        pcall(http.close, httpc)
+        return _M.AGAIN, string.format('resp status %d', res.status)
     end
 
     if res.status ~= 200 then
-        pcall(http.close, httpc)
-        return _M.AGAIN, string.format('resp status %d', res.status)
+        return _M.UPSERR, res.reason
     end
 
     local reader = res.body_reader
@@ -166,6 +181,7 @@ function _M.download(ip, port, host, uri, file)
         return _M.ERR, ferr
     end
 
+    local length = 0
     repeat
         local chunk, rerr = reader(8192)
         if rerr then
@@ -175,6 +191,7 @@ function _M.download(ip, port, host, uri, file)
         end
 
         if chunk then
+            length = length + string.len(chunk)
             local wres, werr = fp:write(chunk)
             if not wres then
                 fp:close()
@@ -193,8 +210,31 @@ function _M.download(ip, port, host, uri, file)
         return _M.ERR, mverr
     end
 
-    return _M.OK
+    return _M.OK, res.headers['Content-Length'] or length
 end
 
+
+function _M.NewMC(mchost)
+    local mc, err = memcached:new()
+    if not mc then
+        return nil, err
+    end
+    mc:set_timeout(2000)
+
+    local idx, retry, ok, err = math.random(table.maxn(mchost)), 3, false, ''
+    repeat
+        ok, err = mc:connect(mchost[idx].ip, mchost[idx].port)
+        retry   = retry - 1
+        idx     = idx + 1
+        if idx > table.maxn(mchost) then
+            idx = 1
+        end
+    until ok or retry < 1
+    if not ok then
+        return nil, string.format('connect memcached(%s:%d) error, err: %s', mchost[idx].ip, mchost[idx].port, err)
+    end
+
+    return mc
+end
 
 return _M

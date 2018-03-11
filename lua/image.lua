@@ -357,12 +357,13 @@ ffi.cdef
         SouthEastGravity
     } GravityType;
 
-    void MagickTrimImage( MagickWand *wand, const double fuzz );
-    unsigned int MagickSetImageRedPrimary( MagickWand *wand, const double x, const double y );
+    typedef struct _PointInfo {
+        double x, y, z;
+    } PointInfo;
+
     void MagickDrawSetFont( DrawingWand *drawing_wand, const char *font_name );
     void MagickDrawSetFontSize( DrawingWand *drawing_wand, const double pointsize );
     void MagickDrawSetTextEncoding( DrawingWand *drawing_wand, const char *encoding );
-    unsigned int MagickSetImageFuzz( MagickWand *wand, const double fuzz );
     unsigned int MagickAnnotateImage( MagickWand *wand, const DrawingWand *drawing_wand,
                                       const double x, const double y, const double angle,
                                       const char *text );
@@ -380,11 +381,9 @@ ffi.cdef
     unsigned int MagickSetImageChannelDepth( MagickWand *wand, const ChannelType channel,
                                          const unsigned long depth );
     void MagickDrawSetTextUnderColor( DrawingWand *drawing_wand, const PixelWand *under_wand );
-    unsigned int MagickMedianFilterImage( MagickWand *wand, const double radius );
-    MagickWand *MagickMosaicImages( MagickWand *wand );
 
     unsigned int MagickGetImageIndex( MagickWand *wand );
-    unsigned long MagickGetImageIterations( MagickWand *wand );
+    unsigned int MagickGetImageIterations( MagickWand *wand );
     unsigned int MagickNextImage( MagickWand *wand );
     unsigned int MagickSpreadImage( MagickWand *wand, const double radius );
     unsigned int MagickCharcoalImage( MagickWand *wand, const double radius, const double sigma );
@@ -393,7 +392,6 @@ ffi.cdef
     unsigned int MagickSetImageDelay( MagickWand *wand, const unsigned long delay );
 
     unsigned int MagickAddImage( MagickWand *wand, const MagickWand *add_wand );
-    MagickWand *MagickAppendImages( MagickWand *wand, const unsigned int stack );
     MagickWand *MagickCoalesceImages( MagickWand *wand );
     void MagickResetIterator( MagickWand *wand );
     unsigned int MagickSetImageIterations( MagickWand *wand, const unsigned long iterations );
@@ -402,6 +400,34 @@ ffi.cdef
                                 const unsigned int adjoin );
     unsigned int MagickSetImageOption( MagickWand *wand, const char *format, const char *key,
                                    const char *value );
+    unsigned int MagickSetImageIndex( MagickWand *wand, const long index );
+    MagickWand *MagickAppendImages( MagickWand *wand, const unsigned int stack );
+    unsigned int MagickSetImagePage( MagickWand *wand, const unsigned long width,
+                                 const unsigned long height, const long x, const long y );
+    MagickWand *MagickMosaicImages( MagickWand *wand );
+
+    void MagickDrawCircle( DrawingWand *drawing_wand, const double ox, const double oy, const double px,
+                 const double py );
+    void MagickDrawLine( DrawingWand *drawing_wand, const double sx, const double sy, const double ex,
+               const double ey );
+    void MagickDrawRectangle( DrawingWand *drawing_wand, const double x1, const double y1,
+                    const double x2, const double y2 );
+    void MagickDrawRotate( DrawingWand *drawing_wand, const double degrees );
+
+    void MagickDrawPathStart( DrawingWand *drawing_wand );
+    void MagickDrawPathFinish( DrawingWand *drawing_wand );
+    void MagickDrawPathLineToAbsolute( DrawingWand *drawing_wand, const double x, const double y );
+    void MagickDrawPathCurveToAbsolute( DrawingWand *drawing_wand, const double x1, const double y1,
+                              const double x2, const double y2, const double x,
+                              const double y );
+    void MagickDrawPolyline( DrawingWand *drawing_wand, const unsigned long number_coordinates,
+                  const PointInfo *coordinates );
+    void MagickDrawPathMoveToAbsolute( DrawingWand *drawing_wand, const double x, const double y );
+    void MagickDrawPathEllipticArcAbsolute( DrawingWand *drawing_wand, const double rx, const double ry,
+                                  const double x_axis_rotation,
+                                  unsigned int large_arc_flag, unsigned int sweep_flag,
+                                  const double x, const double y );
+
 ]]
 
 
@@ -518,26 +544,24 @@ function Image:load(path, width, height)
    return self
 end
 
+
+function Image:setQuality(quality)
+    clib.MagickSetCompressionQuality(self.wand, quality)
+    return self
+end
+
+
 -- Save image:
 function Image:save(path, quality)
-   -- Format?
-   -- local format = (path:gfind('%.(...)$')() or path:gfind('%.(....)$')()):upper()
-   -- if format == 'JPG' then format = 'JPEG' end
-   -- self:format(format)
-
    -- Set quality:
-   quality = quality or 85
+   quality = quality or 75
    clib.MagickSetCompressionQuality(self.wand, quality)
 
-   -- Save:
    local status = clib.MagickWriteImage(self.wand, path)
-
-   -- Error?
    if status == 0 then
       magick_error(self, 'error saving image')
    end
 
-   -- return self
    return self
 end
 
@@ -1012,6 +1036,7 @@ function Image:removeProfile(name)
    return self
 end
 
+
 -- Export to Blob:
 function Image:toBlob(quality)
    -- Size pointer:
@@ -1037,6 +1062,7 @@ function Image:toBlob(quality)
    return blob, tonumber(sizep[0])
 end
 
+
 -- Export to string:
 function Image:toString(quality)
    -- To blob:
@@ -1049,80 +1075,42 @@ function Image:toString(quality)
    return str
 end
 
+
 -- To Tensor:
-function Image:toTensor(dataType, colorspace, dims, nocopy)
-   require "torch"
-   -- Dims:
-   local width,height = self:size()
+function Image:toPixels(dataType, colorspace)
+    local width,height = self:size()
 
-   -- Color space:
-   colorspace = colorspace or 'RGB'  -- any combination of R, G, B, A, C, Y, M, K, and I
-   -- common colorspaces are: RGB, RGBA, CYMK, and I
-
-   -- Other colorspaces?
-   if colorspace == 'HSL' or colorspace == 'HWB' or colorspace == 'LAB' or colorspace == 'YUV' then
-      -- Switch to colorspace:
-      self:colorspace(colorspace)
-      colorspace = 'RGB'
-   end
-
+    -- Color space:
+    colorspace = colorspace or 'RGBA'
+    local channel = 3
+    if colorspace == "RGBA" or colorspace == "CYMK" then
+        channel = 4
+    end
    -- Type:
    dataType = dataType or 'byte'
-   local tensorType, pixelType
+   local pixelType
    if dataType == 'byte' then
-      tensorType = 'ByteTensor'
       pixelType = 'CharPixel'
    elseif dataType == 'float' then
-      tensorType = 'FloatTensor'
       pixelType = 'FloatPixel'
    elseif dataType == 'double' then
-      tensorType = 'DoubleTensor'
       pixelType = 'DoublePixel'
    else
       error(Image.name .. ': unknown data type ' .. dataType)
    end
 
-   -- Dest:
-   local tensor = Image.buffers['HWD'][tensorType] or torch[tensorType]()
-   tensor:resize(height,width,#colorspace)
-
-   -- Cache tensor:
-   Image.buffers['HWD'][tensorType] = tensor
-
-   -- Raw pointer:
-   local ptx = torch.data(tensor)
-
+   local sizet = width*height*channel
+   local ptx = ffi.new("unsigned char[" .. sizet .. "]")
    -- Export:
    clib.MagickGetImagePixels(self.wand,
                              0, 0, width, height,
                              colorspace, clib[pixelType],
-                             ffi.cast('unsigned char *',ptx))
+                             ffi.cast('unsigned char *', ptx))
 
-   -- Dims:
-   if dims == 'DHW' then
-      -- Transposed Tensor:
-      local tensorDHW = Image.buffers['DHW'][tensorType] or tensor.new()
-      tensorDHW:resize(#colorspace,height,width)
-
-      -- Copy:
-      tensorDHW:copy(tensor:transpose(1,3):transpose(2,3))
-
-      -- Cache:
-      Image.buffers['DHW'][tensorType] = tensorDHW
-
-      -- Return:
-      tensor = tensorDHW
-   end
-
-   -- Return tensor
-   if nocopy then
-      return tensor
-   else
-      return tensor:clone()
-   end
+   return ptx
 end
 
--- Import from blob:
+
 function Image:fromBlob(blob,size)
    -- Read from blob:
    local status = clib.MagickReadImageBlob(
@@ -1140,98 +1128,6 @@ function Image:fromBlob(blob,size)
    return self
 end
 
--- Import from blob:
-function Image:fromString(string)
-   -- Convert blob (lua string) to C string
-   local size = #string
-   blob = ffi.new('char['..size..']', string)
-
-   -- Load blob:
-   return self:fromBlob(blob, size)
-end
-
--- From Tensor:
-function Image:fromTensor(tensor, colorspace, dims)
-   require 'torch'
-   -- Dims:
-   local height,width,depth
-   if dims == 'DHW' then
-      depth,height,width= tensor:size(1),tensor:size(2),tensor:size(3)
-      tensor = tensor:transpose(1,3):transpose(1,2)
-   else -- dims == 'HWD'
-      height,width,depth = tensor:size(1),tensor:size(2),tensor:size(3)
-   end
-
-   -- Force contiguous:
-   tensor = tensor:contiguous()
-
-   -- Color space:
-   if not colorspace then
-      if depth == 1 then
-         colorspace = 'I'
-      elseif depth == 3 then
-         colorspace = 'RGB'
-      elseif depth == 4 then
-         colorspace = 'RGBA'
-      else
-      end
-   end
-   -- any combination of R, G, B, A, C, Y, M, K, and I
-   -- common colorspaces are: RGB, RGBA, CYMK, and I
-
-   -- Compat:
-   assert(#colorspace == depth, Image.name .. '.fromTensor: Tensor depth must match color space')
-
-   -- Type:
-   local ttype = torch.typename(tensor)
-   local pixelType
-   if ttype == 'torch.FloatTensor' then
-      pixelType = 'FloatPixel'
-   elseif ttype == 'torch.DoubleTensor' then
-      pixelType = 'DoublePixel'
-   elseif ttype == 'torch.ByteTensor' then
-      pixelType = 'CharPixel'
-   else
-      error(Image.name .. ': only dealing with float, double and byte')
-   end
-
-   -- Raw pointer:
-   local ptx = torch.data(tensor)
-
-   -- Resize image:
-   self:load('xc:black')
-   self:size(width,height)
-   if colorspace == "RGBA" then
-      clib.MagickSetImageType(self.wand, clib.TrueColorMatteType)
-   end
-   -- Export:
-   clib.MagickSetImagePixels(self.wand,
-                             0, 0, width, height,
-                             colorspace, clib[pixelType],
-                             ffi.cast("unsigned char *", ptx))
-
-   -- Save path:
-   self.path = '<tensor>'
-
-   -- return self
-   return self
-end
-
--- Show:
-function Image:show(zoom)
-   -- Get Tensor from image:
-   local tensor = self:toTensor('float', nil,'DHW')
-
-   -- Display this tensor:
-   require 'image'
-   image.display({
-      image = tensor,
-      zoom = zoom
-   })
-
-   -- return self
-   return self
-end
 
 -- Description:
 function Image:info()
@@ -1297,112 +1193,6 @@ function Image:roundedBorder(radius, bw, color)
     return self
 end
 
--- -- rounded corner
--- function Image:roundedCorner(radius, borderWidth, borderColor)
---     local width, height = self:size()
---     radius = radius or 2
---     if radius < 2 then
---         radius = 2
---     end
-
---     local drawingWand = ffi.gc(clib.MagickNewDrawingWand(), function(drawingWand)
---         clib.MagickDestroyDrawingWand(drawingWand)
---     end)
-
---     local pixelBlack = ffi.gc(clib.NewPixelWand(), function(pixelBlack)
---         clib.DestroyPixelWand(pixelBlack)
---     end)
---     clib.PixelSetColor(pixelBlack, 'black')
---     clib.MagickDrawSetFillColor(drawingWand, pixelBlack)
-
---     local pixelTrans = ffi.gc(clib.NewPixelWand(), function(pixelTrans)
---         clib.DestroyPixelWand(pixelTrans)
---     end)
---     clib.PixelSetColor(pixelTrans, 'transparent')
---     clib.MagickDrawSetStrokeColor(drawingWand, pixelTrans)
---     clib.MagickDrawSetStrokeAntialias(drawingWand, true)
-
---     -- local bw = (width+height)/4
---     clib.MagickDrawSetStrokeWidth(drawingWand, 20)
---     -- clib.MagickDrawRoundRectangle(drawingWand, 0-bw/2, 0-bw/2, width+bw/2, height+bw/2, radius, radius)
-
---     clib.MagickDrawRoundRectangle(drawingWand, 0, 0, width, height, radius+2, radius+2)
-
---     local wand = ffi.gc(clib.NewMagickWand(), function(wand)
---         clib.DestroyMagickWand(wand)
---     end)
-
---     clib.MagickSetSize(wand, width, height)
---     clib.MagickReadImage(wand, "xc:none")
---     clib.MagickSetImageFormat(wand, 'PNG')
---     clib.MagickSetImageBackgroundColor(wand, pixelTrans)
---     clib.MagickDrawImage(wand, drawingWand)
---     self.saveWand(wand, 'test_middle.jpeg')
-
---     -- Out Bumpmap Dissolve CopyOpacity Threshold ~Lighten ~Luminize ~Screen
---     clib.MagickCompositeImage(self.wand, wand, clib['CopyOpacityCompositeOp'], 0, 0)  
---     -- clib.MagickCompositeImage(self.wand, wand, clib['CopyOpacityCompositeOp'], 0, 0)
-
---     if borderWidth then
---         return self:roundedBorder(radius, borderWidth, borderColor)
---     end
-
---     return self
--- end
-
-
--- function Image:roundedCorner2(radius, borderWidth, borderColor)
---     local width, height = self:size()
---     radius = radius or 2
---     if radius < 2 then
---         radius = 2
---     end
-
---     local drawingWand = ffi.gc(clib.MagickNewDrawingWand(), function(drawingWand)
---         clib.MagickDestroyDrawingWand(drawingWand)
---     end)
-
---     local pixelBlack = ffi.gc(clib.NewPixelWand(), function(pixelBlack)
---         clib.DestroyPixelWand(pixelBlack)
---     end)
---     clib.PixelSetColor(pixelBlack, 'black')
---     clib.MagickDrawSetFillColor(drawingWand, pixelBlack)
-
---     local pixelTrans = ffi.gc(clib.NewPixelWand(), function(pixelTrans)
---         clib.DestroyPixelWand(pixelTrans)
---     end)
---     clib.PixelSetColor(pixelTrans, 'transparent')
---     clib.MagickDrawSetStrokeColor(drawingWand, pixelTrans)
---     clib.MagickDrawSetStrokeAntialias(drawingWand, true)
-
---     -- local bw = (width+height)/4
---     clib.MagickDrawSetStrokeWidth(drawingWand, 20)
---     -- clib.MagickDrawRoundRectangle(drawingWand, 0-bw/2, 0-bw/2, width+bw/2, height+bw/2, radius, radius)
-
---     clib.MagickDrawRoundRectangle(drawingWand, 0, 0, width, height, radius+2, radius+2)
-
---     local wand = ffi.gc(clib.NewMagickWand(), function(wand)
---         clib.DestroyMagickWand(wand)
---     end)
-
---     clib.MagickSetSize(wand, width, height)
---     clib.MagickReadImage(wand, "xc:white")
---     clib.MagickSetImageFormat(wand, 'PNG')
---     -- clib.MagickSetImageBackgroundColor(wand, pixelTrans)
---     clib.MagickDrawImage(wand, drawingWand)
---     self.saveWand(wand, 'test_middle.jpeg')
-
---     -- Out Bumpmap Dissolve CopyOpacity Threshold ~Lighten ~Screen ~Plus
---     clib.MagickCompositeImage(self.wand, wand, clib['PlusCompositeOp'], 0, 0)  --Minus
-
---     self:roundedCorner(radius)
---     if borderWidth then
---         return self:roundedBorder(radius, borderWidth, borderColor)
---     end
-
---     return self
--- end
-
 
 function Image:roundedCorner(radius, borderWidth, borderColor)
     local width, height = self:size()
@@ -1462,7 +1252,7 @@ function Image:roundedCorner(radius, borderWidth, borderColor)
 end
 
 
-function Image:setText(text, fontSize, fontColor, font, gravity, x, y, angle)
+function Image:setText(text, fontSize, fontColor, font, gravity, x, y, angle, underColor)
     local width, height = self:size()
     fontSize    = fontSize or width/10
     fontColor   = fontColor or 'white'
@@ -1479,14 +1269,15 @@ function Image:setText(text, fontSize, fontColor, font, gravity, x, y, angle)
     end)
     clib.PixelSetColor(pixelText, fontColor)
 
-    -- local pixelTextUnder = ffi.gc(clib.NewPixelWand(), function(pixelTextUnder)
-    --     clib.DestroyPixelWand(pixelTextUnder)
-    -- end)
-    -- clib.PixelSetColor(pixelTextUnder, 'black')
-
     clib.MagickDrawSetTextEncoding(drawingWand, 'UTF8')
     clib.MagickDrawSetFillColor(drawingWand, pixelText)
-    -- clib.MagickDrawSetTextUnderColor(drawingWand, pixelTextUnder)
+    if underColor then
+        local pixelTextUnder = ffi.gc(clib.NewPixelWand(), function(pixelTextUnder)
+            clib.DestroyPixelWand(pixelTextUnder)
+        end)
+        clib.PixelSetColor(pixelTextUnder, underColor)
+        clib.MagickDrawSetTextUnderColor(drawingWand, pixelTextUnder)
+    end
     clib.MagickDrawSetFontSize(drawingWand, fontSize)
     clib.MagickDrawSetTextAntialias(drawingWand, 1)
     clib.MagickDrawSetFont(drawingWand, font)
@@ -1536,26 +1327,98 @@ function Image:setGravity(s)
     return self
 end
 
+function Image:line(sx, sy, ex, ey, color)
+    local drawingWand = ffi.gc(clib.MagickNewDrawingWand(), function(drawingWand)
+        clib.MagickDestroyDrawingWand(drawingWand)
+    end)
+
+    local pixelNone = ffi.gc(clib.NewPixelWand(), function(pixelNone)
+        clib.DestroyPixelWand(pixelNone)
+    end)
+    clib.PixelSetColor(pixelNone, color)
+    clib.MagickDrawSetStrokeColor(drawingWand, pixelNone)
+    clib.MagickDrawSetStrokeAntialias(drawingWand, true)
+
+    clib.MagickDrawLine(drawingWand, sx, sy, ex, ey)
+    -- clib.MagickDrawPathStart(drawingWand)
+    -- clib.MagickDrawPathLineToAbsolute(drawingWand, sx, sy)
+    -- clib.MagickDrawPathLineToAbsolute(drawingWand, ex, ey)
+    -- clib.MagickDrawPathFinish(drawingWand)
+
+    clib.MagickDrawImage(self.wand, drawingWand)
+    return self
+end
+
+function Image:circle(x, y, x1, y1, color)
+    local drawingWand = ffi.gc(clib.MagickNewDrawingWand(), function(drawingWand)
+        clib.MagickDestroyDrawingWand(drawingWand)
+    end)
+
+    local pixel = ffi.gc(clib.NewPixelWand(), function(pixel)
+        clib.DestroyPixelWand(pixel)
+    end)
+
+    local pixelNone = ffi.gc(clib.NewPixelWand(), function(pixelNone)
+        clib.DestroyPixelWand(pixelNone)
+    end)
+    clib.PixelSetColor(pixel, color)
+    clib.PixelSetColor(pixelNone, "xc:black")
+    clib.MagickDrawSetStrokeColor(drawingWand, pixel)
+    clib.MagickDrawSetFillColor(drawingWand, pixelNone)
+    clib.MagickDrawSetStrokeAntialias(drawingWand, true)
+
+    -- clib.MagickDrawPathStart(drawingWand)
+    -- clib.MagickDrawPathMoveToAbsolute(drawingWand, 100, 200)
+    -- clib.MagickDrawPathEllipticArcAbsolute(drawingWand, 30, 50, 0, 0, 1, 100, 200)
+    -- clib.MagickDrawPathFinish(drawingWand)
+    clib.MagickDrawCircle(drawingWand, x, y, x1, y1)
+
+    local mask = ffi.gc(clib.NewMagickWand(), function(mask)
+        clib.DestroyMagickWand(mask)
+    end)
+
+    local width, height = self:size()
+    clib.MagickSetSize(mask, width, height)
+    clib.MagickReadImage(mask, "xc:none")
+    clib.MagickSetImageFormat(mask, 'PNG')
+    clib.MagickSetImageBackgroundColor(mask, pixelNone)
+    clib.MagickDrawImage(mask, drawingWand)
+    clib.MagickCompositeImage(self.wand, mask, clib['CopyBlackCompositeOp'], 0, 0) 
+
+    -- clib.MagickDrawImage(self.wand, drawingWand)
+    return self
+end
+
+function Image:rectangle(x1, y1, x2, y2, color, radius)
+    local drawingWand = ffi.gc(clib.MagickNewDrawingWand(), function(drawingWand)
+        clib.MagickDestroyDrawingWand(drawingWand)
+    end)
+    local pixelNone = ffi.gc(clib.NewPixelWand(), function(pixelNone)
+        clib.DestroyPixelWand(pixelNone)
+    end)
+    clib.PixelSetColor(pixelNone, color)
+    clib.MagickDrawSetFillColor(drawingWand, pixelNone)
+    clib.MagickDrawSetStrokeAntialias(drawingWand, true)
+
+
+    if radius and radius > 0 and radius <= 360 then
+        clib.MagickDrawRoundRectangle(drawingWand, x1, y1, x2, y2, radius, radius)
+    else
+        clib.MagickDrawRectangle(drawingWand, x1, y1, x2, y2)
+    end
+    -- clib.MagickDrawRotate(drawingWand, degrees)
+
+    clib.MagickDrawImage(self.wand, drawingWand)
+
+    return self
+end
+
+
 function Image:median(radius)
     clib.MagickMedianFilterImage(self.wand, radius)
     return self
 end
 
-
-function Image:mosaic()
-    self.wand = clib.MagickMosaicImages(self.wand)
-    return self
-end
-
-function Image:redPrimary(x, y)
-    clib.MagickSetImageRedPrimary(self.wand, x, y)
-    return self
-end
-
-function Image:fuzz(f)
-    clib.MagickSetImageFuzz(self.wand, f)
-    return self
-end
 
 function Image:next()
     local b = clib.MagickNextImage(self.wand)
@@ -1572,8 +1435,13 @@ function Image:charcoal(radius, sigma)
     return self
 end
 
-function Image:index()
-    return clib.MagickGetImageIterations(self.wand)
+-- 当前图片的索引
+function Image:index(idx)
+    if idx then
+        clib.MagickSetImageIndex(self.wand, idx)
+        return self
+    end
+    return clib.MagickGetImageIndex(self.wand)
 end
 
 function Image:delay(d)
@@ -1585,44 +1453,42 @@ function Image:delay(d)
     return d
 end
 
+function Image:append()
+    self.wand = clib.MagickAppendImages(self.wand, true)
+    return self.wand
+end
+
 function Image:add(imgx)
     clib.MagickAddImage(self.wand, imgx.wand)
     return self
 end
 
-function Image:setOption(key, val)
-    local fmt = self:format() or 'GIF'
-    clib.MagickSetImageOption(self.wand, fmt, key, val)
+function Image:page(width, height, x, y)
+    clib.MagickSetImagePage(self.wand, width, height, x, y)
     return self
 end
 
-function Image:append(stack)
-    self.wand = clib.MagickAppendImages(self.wand, stack)
+function Image:mosaic()
+    self.wand = clib.MagickMosaicImages(self.wand)
     return self
 end
 
-function Image:reset()
+function Image:resetIterator()
     clib.MagickResetIterator(self.wand)
     return self
 end
 
-function Image:setIter(iter)
-    clib.MagickSetImageIterations(self.wand, iter)
-    return self
+-- 循环次数
+function Image:iterations(iter)
+    if iter then
+        clib.MagickSetImageIterations(self.wand, iter)
+        return self
+    end
+    return clib.MagickGetImageIterations()
 end
 
 function Image:coalesce()
     self.wand = clib.MagickCoalesceImages(self.wand)
-    return self
-end
-
-function Image:decon()
-    self.wand = clib.MagickDeconstructImages(self.wand)
-    return self
-end
-
-function Image:trim(fuzz)
-    clib.MagickTrimImage(self.wand, fuzz)
     return self
 end
 
