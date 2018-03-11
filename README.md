@@ -149,7 +149,7 @@ Command
 
 [Back to TOC](#table-of-contents)
 
-图片位置说明
+Gravity
 ===========
 
   ```
@@ -179,6 +179,7 @@ Copyright and License
 This module is licensed under the GPL license.
 
 Copyright (C) 2017-2018, by vislee.
+
 Copyright (C) 2017-2018, by SAE.
 
 All rights reserved.
