@@ -628,6 +628,15 @@ function _M:img_process(img, cmdkv)
                 return 0, 0, w, h
             end
 
+            local gx, gy = w*3/6, h*3/6
+            if gravity and gravity == "centergreed" then
+                local greed = w
+                if greed > h then
+                    greed = h
+                end
+                return gx, gy, greed, greed
+            end
+
             if not gravity then
                 gravity = string.lower(conf.gravity['none'])
             end
@@ -635,7 +644,7 @@ function _M:img_process(img, cmdkv)
                 return 0, 0, w, h
             end
 
-            local gx, gy = w*3/6, h*3/6
+
             if string.find(gravity, 'north') then
                 gy = h/6
             end
