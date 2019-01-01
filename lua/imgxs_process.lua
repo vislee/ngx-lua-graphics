@@ -598,6 +598,10 @@ function _M:img_process(img, cmdkv)
             end
 
             local call_opencv = function(gravity, img)
+                if w > 4000 or h > 3000 then
+                    return {x=0, y=0, w=w, h=h}, {{x=0, y=0, w=w, h=h}}
+                end
+
                 local byt = img:toPixels('byte', 'RGB')
                 local cv = opencv()
                 cv:cvImgxs(w, h, byt, 8, 3)
